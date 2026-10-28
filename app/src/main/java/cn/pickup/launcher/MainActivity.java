@@ -29,14 +29,16 @@ public final class MainActivity extends Activity {
     static final String ACTION_OPEN = "cn.pickup.launcher.OPEN";
     static final String EXTRA_DESTINATION = "destination";
 
-    // ===== 水蓝清凉主题 =====
-    private static final int PAGE_BACKGROUND = Color.rgb(240, 246, 249);
+    // ===== 待办清单主题（对应 v6 原型） =====
+    private static final int PAGE_BACKGROUND = Color.rgb(237, 241, 247);
     private static final int CARD_WHITE = Color.WHITE;
-    private static final int TEXT_PRIMARY = Color.rgb(27, 43, 51);
-    private static final int TEXT_SECONDARY = Color.rgb(116, 133, 142);
-    private static final int LINE_COLOR = Color.rgb(223, 233, 238);
-    private static final int ACCENT_WATER = Color.rgb(42, 122, 158);
+    private static final int TEXT_PRIMARY = Color.rgb(42, 52, 70);
+    private static final int TEXT_SECONDARY = Color.rgb(138, 148, 166);
+    private static final int LINE_COLOR = Color.rgb(228, 233, 241);
+    private static final int ACCENT_WATER = Color.rgb(52, 97, 143);
     private static final int NAV_IDLE = Color.rgb(154, 166, 157);
+    private static final int CHECK_IDLE = Color.rgb(198, 207, 221);
+    private static final int DONE_TEXT = Color.rgb(160, 172, 178);
 
     // ===== 平台品牌色（渐变起止） =====
     private static final int[] CAINIAO_COLORS = {Color.rgb(63, 179, 212), Color.rgb(31, 122, 158)};
@@ -46,17 +48,18 @@ public final class MainActivity extends Activity {
     private static final int[] XHS_COLORS = {Color.rgb(232, 98, 156), Color.rgb(216, 67, 124)};
     private static final int[] DOUYIN_COLORS = {Color.rgb(43, 43, 51), Color.rgb(15, 15, 20)};
 
-    // 当前选中的身份码平台，默认淘宝
-    private Destination selectedIdentity = Destination.TAOBAO;
+    // 顶部两个分段：取件（默认） / 身份码
+    private static final int TAB_PICKUP = 0;
+    private static final int TAB_CHECKOUT = 1;
 
-    private LinearLayout identityCard;
-    private TextView identityTitle;
-    private TextView identitySubtitle;
-    private LinearLayout segmentRow;
-    private LinearLayout pendingTabButton;
-    private LinearLayout codeTabButton;
-    private ScrollView pendingPage;
-    private ScrollView codePage;
+    private final View[] segmentButtons = new View[2];
+    private View addWrapView;
+    private ScrollView pickupPage;
+    private ScrollView checkoutPage;
+    private int currentTab = TAB_PICKUP;
+    private TextView summaryTitle;
+    private TextView summaryHint;
+    private ProgressRingView summaryRing;
     private LinearLayout packageListContainer;
     private TextView smsStatusView;
     private TextView notifyStatusView;
@@ -113,7 +116,7 @@ public final class MainActivity extends Activity {
     }
 
     // =====================================================================
-    // 页面骨架：内容区（两个可切换页面） + 底部导航
+    // 页面骨架：内容区（三个可切换页面） + 底部导航
     // =====================================================================
 
     private View buildContent() {
@@ -121,142 +124,212 @@ public final class MainActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(PAGE_BACKGROUND);
 
-        // targetSdk 35 强制 edge-to-edge：内容会画到状态栏底下，必须避让
-        //（普通主题下 top 为 0，此处理不会生效，两相兼容）
+        // targetSdk 35 强制 edge-to-edge：内容会画到状态栏/手势条底下，必须避让
         root.setOnApplyWindowInsetsListener((v, insets) -> {
             int top;
+            int bottom;
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
                 top = insets.getInsets(android.view.WindowInsets.Type.statusBars()).top;
+                bottom = insets.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom;
             } else {
                 top = insets.getSystemWindowInsetTop();
+                bottom = insets.getSystemWindowInsetBottom();
             }
             if (top > 0) {
                 v.setPadding(0, top, 0, 0);
             }
+            if (addWrapView != null && bottom > 0) {
+                addWrapView.setPadding(0, dp(10), 0, bottom);
+            }
             return insets;
         });
 
+        root.addView(buildHeader());
+        root.addView(buildSegmentBar());
+
         FrameLayout content = new FrameLayout(this);
-        pendingPage = buildPendingPage();
-        codePage = buildCodePage();
-        codePage.setVisibility(View.GONE);
-        content.addView(pendingPage, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-        ));
-        content.addView(codePage, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-        ));
+        pickupPage = buildPickupPage();
+        checkoutPage = buildCheckoutPage();
+        checkoutPage.setVisibility(View.GONE);
+        content.addView(pickupPage, frameFillParams());
+        content.addView(checkoutPage, frameFillParams());
         root.addView(content, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
                 1f
         ));
 
-        root.addView(buildNavBar(), new LinearLayout.LayoutParams(
+        addWrapView = buildAddButtonWrap();
+        root.addView(addWrapView, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
         ));
         return root;
     }
 
-    private View buildNavBar() {
+    /** 顶部标题栏：我的包裹 + 右上角多功能入口（历史 / 查待取 / 自动获取 / 添加到桌面）。 */
+    private View buildHeader() {
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(20), dp(10), dp(14), dp(4));
+
+        header.addView(text("我的包裹", 21, TEXT_PRIMARY, Typeface.BOLD),
+                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView menu = text("≡", 18, TEXT_PRIMARY, Typeface.BOLD);
+        menu.setGravity(Gravity.CENTER);
+        menu.setBackground(rounded(CARD_WHITE, 999));
+        menu.setClickable(true);
+        menu.setFocusable(true);
+        menu.setContentDescription("更多功能：历史取件码、查待取快递、自动获取设置、添加到桌面");
+        menu.setOnClickListener(v -> showMenuDialog());
+        header.addView(menu, new LinearLayout.LayoutParams(dp(36), dp(36)));
+        return header;
+    }
+
+    /** 顶部「取件 / 身份码」分段切换，替代原来的底部导航。 */
+    private View buildSegmentBar() {
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setBackgroundColor(CARD_WHITE);
-        bar.setPadding(dp(24), dp(9), dp(24), dp(9) + getNavBarPadding());
+        bar.setBackground(rounded(Color.rgb(226, 232, 241), 999));
+        bar.setPadding(dp(4), dp(4), dp(4), dp(4));
+        LinearLayout.LayoutParams barParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        barParams.setMargins(dp(20), dp(8), dp(20), dp(6));
+        bar.setLayoutParams(barParams);
 
-        // 高屏 + 手势导航时，用系统窗口 inset 兜底，避免手势条盖住 Tab
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-            bar.setOnApplyWindowInsetsListener((v, insets) -> {
-                int bottom = insets.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom;
-                if (bottom > 0) {
-                    bar.setPadding(dp(24), dp(9), dp(24), dp(9) + bottom);
-                }
-                return insets;
-            });
-        }
-
-        pendingTabButton = navItem("📦", "待取快递", true);
-        pendingTabButton.setOnClickListener(v -> switchTab(true));
-        codeTabButton = navItem("🔢", "取件码", false);
-        codeTabButton.setOnClickListener(v -> switchTab(false));
-
-        bar.addView(pendingTabButton, new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        bar.addView(codeTabButton, new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        segmentButtons[TAB_PICKUP] = segmentButton("取件", TAB_PICKUP);
+        segmentButtons[TAB_CHECKOUT] = segmentButton("身份码", TAB_CHECKOUT);
+        bar.addView(segmentButtons[TAB_PICKUP], horizontalWeightParams(0));
+        bar.addView(segmentButtons[TAB_CHECKOUT], horizontalWeightParams(dp(4)));
+        restyleSegmentBar();
         return bar;
     }
 
-    private LinearLayout navItem(String icon, String label, boolean active) {
+    private LinearLayout segmentButton(String label, int tab) {
         LinearLayout item = new LinearLayout(this);
-        item.setOrientation(LinearLayout.VERTICAL);
         item.setGravity(Gravity.CENTER);
         item.setClickable(true);
         item.setFocusable(true);
-
-        TextView iconView = text(icon, 20, active ? ACCENT_WATER : NAV_IDLE, Typeface.NORMAL);
-        iconView.setGravity(Gravity.CENTER);
-        item.addView(iconView);
-
-        TextView labelView = text(label, 11, active ? ACCENT_WATER : NAV_IDLE, Typeface.BOLD);
-        labelView.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        labelParams.topMargin = dp(3);
-        labelView.setLayoutParams(labelParams);
-        item.addView(labelView);
+        item.setContentDescription("切换到" + label);
+        item.setOnClickListener(v -> switchTab(tab));
+        item.addView(text(label, 14, TEXT_SECONDARY, Typeface.BOLD));
         return item;
     }
 
-    private void switchTab(boolean pending) {
-        pendingPage.setVisibility(pending ? View.VISIBLE : View.GONE);
-        codePage.setVisibility(pending ? View.GONE : View.VISIBLE);
-        restyleNavItem(pendingTabButton, pending);
-        restyleNavItem(codeTabButton, !pending);
-    }
-
-    private void restyleNavItem(LinearLayout item, boolean active) {
-        int color = active ? ACCENT_WATER : NAV_IDLE;
-        for (int i = 0; i < item.getChildCount(); i++) {
-            View child = item.getChildAt(i);
-            if (child instanceof TextView) {
-                ((TextView) child).setTextColor(color);
-            }
+    private void restyleSegmentBar() {
+        for (int i = 0; i < segmentButtons.length; i++) {
+            LinearLayout item = (LinearLayout) segmentButtons[i];
+            boolean active = i == currentTab;
+            item.setBackground(rounded(active ? CARD_WHITE : Color.TRANSPARENT, 999));
+            item.setPadding(dp(10), dp(9), dp(10), dp(9));
+            TextView label = (TextView) item.getChildAt(0);
+            label.setTextColor(active ? ACCENT_WATER : TEXT_SECONDARY);
         }
     }
 
-    private int getNavBarPadding() {
-        int resourceId = getResources().getIdentifier("navigation_bar_height", "dimen", "android");
-        if (resourceId > 0) {
-            return getResources().getDimensionPixelSize(resourceId);
-        }
-        return 0;
+    private void switchTab(int tab) {
+        currentTab = tab;
+        pickupPage.setVisibility(tab == TAB_PICKUP ? View.VISIBLE : View.GONE);
+        checkoutPage.setVisibility(tab == TAB_CHECKOUT ? View.VISIBLE : View.GONE);
+        restyleSegmentBar();
+    }
+
+    /** 底部常驻「＋ 添加包裹」按钮，单手拇指的自然落点。 */
+    private View buildAddButtonWrap() {
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setBackground(new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{Color.TRANSPARENT, PAGE_BACKGROUND}));
+        wrap.setPadding(0, dp(14), 0, dp(12));
+
+        TextView add = text("＋ 添加包裹", 16, Color.WHITE, Typeface.BOLD);
+        add.setGravity(Gravity.CENTER);
+        add.setBackground(gradient(new int[]{Color.rgb(72, 120, 168), ACCENT_WATER}, 999));
+        add.setClickable(true);
+        add.setFocusable(true);
+        add.setContentDescription("添加包裹");
+        add.setOnClickListener(v -> showAddDialog(add));
+        FrameLayout.LayoutParams addParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                dp(52)
+        );
+        addParams.setMargins(dp(20), 0, dp(20), 0);
+        wrap.addView(add, addParams);
+        return wrap;
+    }
+
+    private FrameLayout.LayoutParams frameFillParams() {
+        return new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        );
     }
 
     // =====================================================================
-    // 页面一：待取快递
+    // 右上菜单：历史 / 查待取 / 自动获取设置 / 添加到桌面
     // =====================================================================
 
-    private ScrollView buildPendingPage() {
-        ScrollView scrollView = new ScrollView(this);
-        scrollView.setFillViewport(true);
-        scrollView.setBackgroundColor(PAGE_BACKGROUND);
+    private void showMenuDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(10), dp(4), dp(10), dp(4));
+        box.addView(menuItem("🕘", "历史取件码", v -> showHistoryDialog()));
+        box.addView(menuItem("🚚", "查待取快递", v -> showPendingDialog()));
+        box.addView(menuItem("🔔", "自动获取设置", v -> showAutoSettingsDialog()));
+        box.addView(menuItem("📌", "添加到桌面", v -> showPinDialog()));
+        new AlertDialog.Builder(this)
+                .setTitle("更多")
+                .setView(box)
+                .show();
+    }
 
+    private View menuItem(String emoji, String label, View.OnClickListener listener) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(14), dp(13), dp(14), dp(13));
+        row.setClickable(true);
+        row.setFocusable(true);
+        row.setOnClickListener(listener);
+
+        TextView emojiView = text(emoji, 16, TEXT_PRIMARY, Typeface.NORMAL);
+        emojiView.setGravity(Gravity.CENTER);
+        row.addView(emojiView, new LinearLayout.LayoutParams(dp(30), dp(30)));
+
+        TextView labelView = text(label, 15, TEXT_PRIMARY, Typeface.BOLD);
+        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        labelParams.leftMargin = dp(12);
+        row.addView(labelView, labelParams);
+
+        row.addView(text("›", 22, TEXT_SECONDARY, Typeface.NORMAL));
+        return row;
+    }
+
+    // =====================================================================
+    // 待取（弹窗：跳外部 App 看别人家的包裹）
+    // =====================================================================
+
+    private void showPendingDialog() {
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(buildPendingContent());
+        new AlertDialog.Builder(this)
+                .setTitle("查待取快递")
+                .setView(scroll)
+                .setPositiveButton("关闭", null)
+                .show();
+    }
+
+    private LinearLayout buildPendingContent() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(18), dp(14), dp(18), dp(20));
-        scrollView.addView(root, new ScrollView.LayoutParams(
-                ScrollView.LayoutParams.MATCH_PARENT,
-                ScrollView.LayoutParams.WRAP_CONTENT
-        ));
+        root.setPadding(dp(18), dp(4), dp(18), dp(8));
 
-        // ---- 顶部问候 ----
-        root.addView(buildHero("你好 👋", "先看有没有包裹，再出发去驿站"));
+        root.addView(buildHero("五个平台各查各的", "末端系统数据不通，要一个个看"));
 
         // ---- 五个待取入口 ----
         LinearLayout grid = new LinearLayout(this);
@@ -272,15 +345,84 @@ public final class MainActivity extends Activity {
         grid.setLayoutParams(gridParams);
         root.addView(grid);
 
-        // ---- 我的包裹（手动录入，本地保存） ----
-        root.addView(packageHeader());
+        root.addView(hintCard("🔀",
+                "菜鸟驿站和多多驿站是两套独立系统，数据不互通。"
+                        + "拼多多的件常常在淘宝里查不到，两个都要看。"));
 
-        packageListContainer = new LinearLayout(this);
-        packageListContainer.setOrientation(LinearLayout.VERTICAL);
-        root.addView(packageListContainer);
-        refreshPackageList();
+        return root;
+    }
 
-        return scrollView;
+    // =====================================================================
+    // 添加到桌面（弹窗）
+    // =====================================================================
+
+    private void showPinDialog() {
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(buildPinContent());
+        new AlertDialog.Builder(this)
+                .setTitle("添加到桌面")
+                .setView(scroll)
+                .setPositiveButton("关闭", null)
+                .show();
+    }
+
+    private LinearLayout buildPinContent() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(18), dp(4), dp(18), dp(8));
+
+        root.addView(hintCard("📌", "添加后不必进入本应用，桌面点击一次即可跳转。"));
+
+        LinearLayout pinRow1 = new LinearLayout(this);
+        pinRow1.setOrientation(LinearLayout.HORIZONTAL);
+        pinRow1.setWeightSum(4f);
+        pinRow1.setLayoutParams(verticalParams(dp(12)));
+        addPinButton(pinRow1, Destination.TAOBAO_PENDING, "淘宝待取");
+        addPinButton(pinRow1, Destination.PINDUODUO_PENDING, "拼多多待取");
+        addPinButton(pinRow1, Destination.JD, "京东待取");
+        addPinButton(pinRow1, Destination.XHS, "小红书待取");
+        root.addView(pinRow1);
+
+        LinearLayout pinRow2 = new LinearLayout(this);
+        pinRow2.setOrientation(LinearLayout.HORIZONTAL);
+        pinRow2.setWeightSum(4f);
+        pinRow2.setLayoutParams(verticalParams(dp(8)));
+        addPinButton(pinRow2, Destination.DOUYIN, "抖音待取");
+        addPinButton(pinRow2, Destination.CAINIAO, "菜鸟码");
+        addPinButton(pinRow2, Destination.TAOBAO, "淘宝码");
+        addPinButton(pinRow2, Destination.PINDUODUO, "拼多多码");
+        root.addView(pinRow2);
+
+        return root;
+    }
+
+    // =====================================================================
+    // 自动获取设置（弹窗：短信权限、通知使用权）
+    // =====================================================================
+
+    private void showAutoSettingsDialog() {
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(18), dp(4), dp(18), dp(8));
+
+        box.addView(hintCard("✨", "开启后，取件短信和菜鸟/淘宝/拼多多通知里的取件码会自动保存，不用手动录入。"));
+
+        smsStatusView = text("", 11, TEXT_SECONDARY, Typeface.NORMAL);
+        box.addView(settingsRow("📩", "短信自动识别", smsStatusView, v -> requestSmsPermission()));
+
+        notifyStatusView = text("", 11, TEXT_SECONDARY, Typeface.NORMAL);
+        box.addView(settingsRow("🔔", "通知自动识别", notifyStatusView, v -> openNotificationListenerSettings()));
+
+        box.addView(hintCard("💡", "在菜鸟 / 淘宝复制取件码后切回本 App，会自动识别并询问是否保存。"));
+        scroll.addView(box);
+
+        updateAutoStatus();
+        new AlertDialog.Builder(this)
+                .setTitle("自动获取设置")
+                .setView(scroll)
+                .setPositiveButton("关闭", null)
+                .show();
     }
 
     private View buildHero(String title, String subtitle) {
@@ -388,10 +530,91 @@ public final class MainActivity extends Activity {
     }
 
     // =====================================================================
-    // 页面二：取件码
+    // 页面一：取件（自己的取件码卡片，默认进入）
     // =====================================================================
 
-    private ScrollView buildCodePage() {
+    private ScrollView buildPickupPage() {
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
+        scrollView.setBackgroundColor(PAGE_BACKGROUND);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(18), dp(8), dp(18), dp(16));
+        scrollView.addView(root, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT,
+                ScrollView.LayoutParams.WRAP_CONTENT
+        ));
+
+        // ---- 汇总卡：进度环 + 待取数量 ----
+        root.addView(buildSummaryCard());
+
+        packageListContainer = new LinearLayout(this);
+        packageListContainer.setOrientation(LinearLayout.VERTICAL);
+        root.addView(packageListContainer);
+        refreshPackageList();
+
+        return scrollView;
+    }
+
+    /** 汇总卡：进度环（已取/总数）+「还有 N 个待取」。 */
+    private View buildSummaryCard() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(16), dp(14), dp(16), dp(14));
+        card.setBackground(rounded(CARD_WHITE, 18));
+        LinearLayout.LayoutParams cardParams = verticalParams(dp(10));
+        card.setLayoutParams(cardParams);
+
+        summaryRing = new ProgressRingView(this,
+                LINE_COLOR, ACCENT_WATER, TEXT_PRIMARY, TEXT_SECONDARY);
+        card.addView(summaryRing, new LinearLayout.LayoutParams(dp(52), dp(52)));
+
+        LinearLayout labels = new LinearLayout(this);
+        labels.setOrientation(LinearLayout.VERTICAL);
+        labels.setPadding(dp(14), 0, dp(8), 0);
+
+        summaryTitle = text("", 15, TEXT_PRIMARY, Typeface.BOLD);
+        labels.addView(summaryTitle);
+
+        summaryHint = text("", 12, TEXT_SECONDARY, Typeface.NORMAL);
+        LinearLayout.LayoutParams hintParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        hintParams.topMargin = dp(3);
+        summaryHint.setLayoutParams(hintParams);
+        labels.addView(summaryHint);
+
+        card.addView(labels, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        return card;
+    }
+
+    /** taken/total：分母 = 列表里的取件码总数（已取 + 未取）。 */
+    private void refreshSummary(int taken, int total) {
+        if (summaryRing != null) {
+            summaryRing.setProgress(taken, total, true);
+        }
+        if (summaryTitle != null) {
+            int left = total - taken;
+            summaryTitle.setText(total == 0
+                    ? "还没有包裹"
+                    : left == 0 ? "全部取完，出库走起 🎉" : "还有 " + left + " 个待取");
+        }
+        if (summaryHint != null) {
+            summaryHint.setText(total == 0
+                    ? "点下方「＋ 添加包裹」录入取件码"
+                    : "点圆圈完成，变灰沉到底部");
+        }
+    }
+
+    // =====================================================================
+    // 页面二：出库（亮身份码，最高频动作，放在导航栏中间）
+    // =====================================================================
+
+    private ScrollView buildCheckoutPage() {
         ScrollView scrollView = new ScrollView(this);
         scrollView.setFillViewport(true);
         scrollView.setBackgroundColor(PAGE_BACKGROUND);
@@ -404,205 +627,62 @@ public final class MainActivity extends Activity {
                 ScrollView.LayoutParams.WRAP_CONTENT
         ));
 
-        root.addView(buildHero("取件码", "到驿站亮出身份码，扫码即取"));
+        // ---- 身份码平铺：一张卡一个平台，点一次直接亮码 ----
+        root.addView(identityEntry(Destination.TAOBAO));
+        root.addView(identityEntry(Destination.PINDUODUO));
 
-        // ---- 平台切换器：菜鸟 / 淘宝 / 拼多多 ----
-        segmentRow = new LinearLayout(this);
-        segmentRow.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout.LayoutParams segmentParams = verticalParams(dp(14));
-        segmentRow.setLayoutParams(segmentParams);
-
-        segmentRow.addView(segButton(Destination.CAINIAO, "菜", "菜鸟", CAINIAO_COLORS), horizontalWeightParams(0));
-        segmentRow.addView(segButton(Destination.TAOBAO, "淘", "淘宝", TAOBAO_COLORS), horizontalWeightParams(dp(8)));
-        segmentRow.addView(segButton(Destination.PINDUODUO, "拼", "拼多多", PDD_COLORS), horizontalWeightParams(dp(8)));
-        root.addView(segmentRow);
-
-        // ---- 身份码大卡 ----
-        identityCard = new LinearLayout(this);
-        identityCard.setOrientation(LinearLayout.VERTICAL);
-        identityCard.setGravity(Gravity.CENTER_HORIZONTAL);
-        identityCard.setPadding(dp(22), dp(20), dp(22), dp(20));
-        identityCard.setClickable(true);
-        identityCard.setFocusable(true);
-        identityCard.setContentDescription("打开当前身份码页面");
-        identityCard.setOnClickListener(v -> DeepLinkLauncher.open(this, selectedIdentity));
-
-        LinearLayout.LayoutParams cardParams = verticalParams(dp(16));
-        cardParams.bottomMargin = dp(18);
-        identityCard.setLayoutParams(cardParams);
-
-        LinearLayout caption = new LinearLayout(this);
-        caption.setOrientation(LinearLayout.HORIZONTAL);
-
-        identityTitle = text("", 14, Color.WHITE, Typeface.BOLD);
-        caption.addView(identityTitle, new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-
-        TextView refresh = text("点击打开 ›", 12, Color.WHITE, Typeface.NORMAL);
-        caption.addView(refresh);
-        identityCard.addView(caption);
-
-        TextView markBig = text("🎫", 52, Color.WHITE, Typeface.NORMAL);
-        markBig.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams markParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        markParams.topMargin = dp(16);
-        markBig.setLayoutParams(markParams);
-        identityCard.addView(markBig);
-
-        TextView identityNum = text("身份码", 22, Color.WHITE, Typeface.BOLD);
-        identityNum.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams numParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        numParams.topMargin = dp(10);
-        identityNum.setLayoutParams(numParams);
-        identityCard.addView(identityNum);
-
-        identitySubtitle = text("", 12, Color.WHITE, Typeface.NORMAL);
-        identitySubtitle.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams subParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        subParams.topMargin = dp(6);
-        identitySubtitle.setLayoutParams(subParams);
-        identityCard.addView(identitySubtitle);
-
-        TextView tip = text("🛡️ 本码仅用于取件核验，请勿截图外传", 11, Color.WHITE, Typeface.NORMAL);
-        tip.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams tipParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        tipParams.topMargin = dp(14);
-        tip.setLayoutParams(tipParams);
-        identityCard.addView(tip);
-
-        root.addView(identityCard);
-        applyIdentitySelection();
-
-        // ---- 历史记录入口（点进去才能看） ----
-        root.addView(historyEntry());
-
-        refreshHistory();
-
-        // ---- 自动获取取件码（短信 / 通知 / 剪贴板） ----
-        root.addView(sectionTitle("自动获取取件码", 16));
-        root.addView(hintCard("✨", "开启后，取件短信和菜鸟/淘宝/拼多多通知里的取件码会自动保存，不用手动录入。"));
-
-        smsStatusView = text("", 11, TEXT_SECONDARY, Typeface.NORMAL);
-        root.addView(settingsRow("📩", "短信自动识别", smsStatusView, v -> requestSmsPermission()));
-
-        notifyStatusView = text("", 11, TEXT_SECONDARY, Typeface.NORMAL);
-        root.addView(settingsRow("🔔", "通知自动识别", notifyStatusView, v -> openNotificationListenerSettings()));
-
-        root.addView(hintCard("💡", "在菜鸟 / 淘宝复制取件码后切回本 App，会自动识别并询问是否保存。"));
-
-        // ---- 添加到桌面 ----
-        root.addView(sectionTitle("添加到桌面", 16));
-        root.addView(hintCard("📌", "添加后不必进入本应用，桌面点击一次即可跳转。"));
-
-        LinearLayout pinRow1 = new LinearLayout(this);
-        pinRow1.setOrientation(LinearLayout.HORIZONTAL);
-        pinRow1.setWeightSum(4f);
-        pinRow1.setLayoutParams(verticalParams(dp(12)));
-        addPinButton(pinRow1, Destination.TAOBAO, "淘宝码");
-        addPinButton(pinRow1, Destination.PINDUODUO, "拼多多码");
-        addPinButton(pinRow1, Destination.JD, "京东待取");
-        addPinButton(pinRow1, Destination.XHS, "小红书待取");
-        root.addView(pinRow1);
-
-        LinearLayout pinRow2 = new LinearLayout(this);
-        pinRow2.setOrientation(LinearLayout.HORIZONTAL);
-        pinRow2.setWeightSum(4f);
-        pinRow2.setLayoutParams(verticalParams(dp(8)));
-        addPinButton(pinRow2, Destination.CAINIAO, "菜鸟码");
-        addPinButton(pinRow2, Destination.TAOBAO_PENDING, "淘宝待取");
-        addPinButton(pinRow2, Destination.PINDUODUO_PENDING, "拼多多待取");
-        addPinButton(pinRow2, Destination.DOUYIN, "抖音待取");
-        root.addView(pinRow2);
+        root.addView(hintCard("🛡️",
+                "取件码是包裹的，身份码是你的。出库只有淘宝和拼多多两套，菜鸟归淘宝。"
+                        + "两套末端系统数据不互通，淘宝里常常查不到拼多多的件。"));
 
         return scrollView;
     }
 
-    private View segButton(Destination destination, String mark, String label, int[] colors) {
-        LinearLayout item = new LinearLayout(this);
-        item.setOrientation(LinearLayout.HORIZONTAL);
-        item.setGravity(Gravity.CENTER);
-        item.setClickable(true);
-        item.setFocusable(true);
-        item.setContentDescription("切换到" + destination.title);
-        item.setTag(destination);
-        item.setOnClickListener(v -> {
-            selectedIdentity = destination;
-            applyIdentitySelection();
-        });
+    /** 平铺身份码入口卡：点整张卡直接打开对应平台身份码。 */
+    private View identityEntry(Destination destination) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(18), dp(18), dp(16), dp(18));
+        card.setBackground(rounded(CARD_WHITE, 18));
+        card.setClickable(true);
+        card.setFocusable(true);
+        card.setContentDescription("打开" + destination.identityName() + "身份码");
+        card.setOnClickListener(v -> DeepLinkLauncher.open(this, destination));
+        card.setLayoutParams(verticalParams(dp(12)));
 
-        TextView markView = text(mark, 12, Color.WHITE, Typeface.BOLD);
-        markView.setGravity(Gravity.CENTER);
-        markView.setBackground(gradient(colors, 8));
-        item.addView(markView, new LinearLayout.LayoutParams(dp(24), dp(24)));
+        TextView mark = text(destination.mark, 20, Color.WHITE, Typeface.BOLD);
+        mark.setGravity(Gravity.CENTER);
+        mark.setBackground(gradient(colorsFor(destination), 14));
+        card.addView(mark, new LinearLayout.LayoutParams(dp(48), dp(48)));
 
-        TextView labelView = text(label, 13, TEXT_PRIMARY, Typeface.BOLD);
-        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(
+        LinearLayout labels = new LinearLayout(this);
+        labels.setOrientation(LinearLayout.VERTICAL);
+        labels.setPadding(dp(14), 0, dp(8), 0);
+
+        labels.addView(text(destination.identityName() + "身份码", 16, TEXT_PRIMARY, Typeface.BOLD));
+
+        TextView sub = text(destination == Destination.PINDUODUO
+                        ? "多多代收点 · 校园取件"
+                        : "菜鸟驿站 · 校园取件",
+                12, TEXT_SECONDARY, Typeface.NORMAL);
+        LinearLayout.LayoutParams subParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
         );
-        labelParams.leftMargin = dp(8);
-        labelView.setLayoutParams(labelParams);
-        item.addView(labelView);
-        return item;
-    }
+        subParams.topMargin = dp(3);
+        sub.setLayoutParams(subParams);
+        labels.addView(sub);
 
-    private void applyIdentitySelection() {
-        String title;
-        String subtitle;
-        int[] colors;
-        switch (selectedIdentity) {
-            case CAINIAO:
-                title = "菜鸟驿站身份码";
-                subtitle = "向驿站工作人员出示";
-                colors = CAINIAO_COLORS;
-                break;
-            case PINDUODUO:
-                title = "拼多多身份码";
-                subtitle = "向多多买菜代收点工作人员出示";
-                colors = PDD_COLORS;
-                break;
-            case TAOBAO:
-            default:
-                title = "淘宝驿站身份码";
-                subtitle = "向驿站工作人员出示";
-                colors = TAOBAO_COLORS;
-                break;
-        }
+        card.addView(labels, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-        GradientDrawable cardBackground = gradient(colors, 22);
-        identityCard.setBackground(cardBackground);
-        identityTitle.setText(title);
-        identitySubtitle.setText(subtitle);
-        restyleSegmentRow(segmentRow);
-    }
-
-    private void restyleSegmentRow(LinearLayout segmentRow) {
-        if (segmentRow == null) {
-            return;
-        }
-        for (int i = 0; i < segmentRow.getChildCount(); i++) {
-            View child = segmentRow.getChildAt(i);
-            if (child instanceof LinearLayout && child.getTag() instanceof Destination) {
-                Destination destination = (Destination) child.getTag();
-                boolean selected = destination == selectedIdentity;
-                GradientDrawable background = rounded(selected ? Color.rgb(247, 250, 252) : CARD_WHITE, 999);
-                background.setStroke(dp(2), selected ? colorsFor(destination)[1] : LINE_COLOR);
-                child.setBackground(background);
-                child.setPadding(dp(6), dp(10), dp(6), dp(10));
-            }
-        }
+        TextView go = text("亮码 ›", 14, ACCENT_WATER, Typeface.BOLD);
+        go.setGravity(Gravity.CENTER);
+        go.setBackground(rounded(Color.rgb(232, 240, 249), 999));
+        go.setPadding(dp(14), dp(9), dp(14), dp(9));
+        card.addView(go);
+        return card;
     }
 
     private int[] colorsFor(Destination destination) {
@@ -632,8 +712,9 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        // 上次标记为已取件的卡片，本次进入时归档到历史记录
-        justPickedCodes.clear();
+        // 关键：不要在 onResume 里清空 justPickedCodes。清空只在冷启动（新 Activity 实例）
+        // 时自然发生——这样本会话内完成的卡片会保持灰态并沉到列表底部，切到出库页再切回来
+        // 也不会消失；只有杀进程重新打开，已完成的卡片才真正归档进历史记录。
         refreshPackageList();
         refreshHistory();
         updateAutoStatus();
@@ -657,86 +738,33 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private View packageHeader() {
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams headerParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        headerParams.topMargin = dp(14);
-        headerParams.bottomMargin = dp(10);
-        header.setLayoutParams(headerParams);
-
-        header.addView(text("我的包裹", 17, TEXT_PRIMARY, Typeface.BOLD),
-                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-
-        TextView add = text("＋ 添加包裹", 13, Color.WHITE, Typeface.BOLD);
-        add.setGravity(Gravity.CENTER);
-        add.setBackground(gradient(new int[]{Color.rgb(63, 179, 212), ACCENT_WATER}, 999));
-        add.setPadding(dp(14), dp(8), dp(14), dp(8));
-        add.setClickable(true);
-        add.setFocusable(true);
-        add.setContentDescription("添加包裹");
-        add.setOnClickListener(v -> showAddDialog());
-        header.addView(add);
-        return header;
-    }
-
-    private void togglePicked(PackageStore.Item item) {
+    /**
+     * 标记完成 / 恢复待取。
+     * 完成时先在原地播放一笔画对勾并变灰（透明度动画），动画结束再重建列表让它沉底；
+     * 恢复时直接重建即可。justPickedCodes 保证会话内沉底的卡片可见，重启才真正归档。
+     */
+    private void togglePicked(PackageStore.Item item, View cardView) {
         if (item.picked) {
             PackageStore.markPicked(this, item, false);
             justPickedCodes.remove(item.code);
             Toast.makeText(this, "已恢复为待取件", Toast.LENGTH_SHORT).show();
-        } else {
-            PackageStore.markPicked(this, item, true);
-            justPickedCodes.add(item.code);
-            Toast.makeText(this, "已取件，可在取件码页的「历史记录」里查看", Toast.LENGTH_SHORT).show();
+            refreshPackageList();
+            refreshHistory();
+            return;
         }
-        refreshPackageList();
-        refreshHistory();
-    }
-
-    private View historyEntry() {
-        LinearLayout entry = new LinearLayout(this);
-        entry.setOrientation(LinearLayout.HORIZONTAL);
-        entry.setGravity(Gravity.CENTER_VERTICAL);
-        entry.setPadding(dp(16), dp(13), dp(14), dp(13));
-        entry.setBackground(rounded(CARD_WHITE, 18));
-        entry.setClickable(true);
-        entry.setFocusable(true);
-        entry.setContentDescription("查看历史记录");
-        entry.setOnClickListener(v -> showHistoryDialog());
-        entry.setLayoutParams(verticalParams(dp(14)));
-
-        TextView icon = text("🕘", 16, TEXT_PRIMARY, Typeface.NORMAL);
-        icon.setGravity(Gravity.CENTER);
-        entry.addView(icon, new LinearLayout.LayoutParams(dp(36), dp(36)));
-
-        LinearLayout labels = new LinearLayout(this);
-        labels.setOrientation(LinearLayout.VERTICAL);
-        labels.setPadding(dp(13), 0, dp(10), 0);
-
-        labels.addView(text("历史记录", 14, TEXT_PRIMARY, Typeface.BOLD));
-
-        historyCountView = text("", 11, TEXT_SECONDARY, Typeface.NORMAL);
-        LinearLayout.LayoutParams countParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        countParams.topMargin = dp(2);
-        historyCountView.setLayoutParams(countParams);
-        labels.addView(historyCountView);
-
-        entry.addView(labels, new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-
-        TextView arrow = text("›", 24, Color.rgb(63, 179, 212), Typeface.NORMAL);
-        arrow.setGravity(Gravity.CENTER);
-        entry.addView(arrow, new LinearLayout.LayoutParams(dp(26), dp(36)));
-
-        return entry;
+        PackageStore.markPicked(this, item, true);
+        justPickedCodes.add(item.code);
+        Toast.makeText(this, "已取件，可在「历史取件码」里查看", Toast.LENGTH_SHORT).show();
+        if (cardView != null) {
+            cardView.animate().alpha(0.45f).setDuration(380).start();
+            cardView.postDelayed(() -> {
+                refreshPackageList();
+                refreshHistory();
+            }, 420);
+        } else {
+            refreshPackageList();
+            refreshHistory();
+        }
     }
 
     private List<PackageStore.Item> loadHistory() {
@@ -817,7 +845,7 @@ public final class MainActivity extends Activity {
         List<PackageStore.Item> history = loadHistory();
         if (history.isEmpty()) {
             historyDialogContainer.addView(hintCard("🗂️",
-                    "还没有取件记录。在「待取快递」里点包裹左侧的圆圈打勾，就会归档到这里。"));
+                    "还没有取件记录。在上方包裹卡片左侧点圆圈打勾，就会归档到这里。"));
             return;
         }
         for (PackageStore.Item item : history) {
@@ -904,7 +932,8 @@ public final class MainActivity extends Activity {
 
         if (active.isEmpty() && done.isEmpty()) {
             packageListContainer.addView(hintCard("📭",
-                    "还没有待取的包裹。点右上「＋ 添加包裹」录入取件码，它就会一直显示在这里。"));
+                    "还没有待取的包裹。点下方「＋ 添加包裹」录入取件码，它就会一直显示在这里。"));
+            refreshSummary(0, 0);
             return;
         }
 
@@ -914,141 +943,84 @@ public final class MainActivity extends Activity {
         for (PackageStore.Item item : done) {
             packageListContainer.addView(packageCard(item, true));
         }
+        refreshSummary(done.size(), active.size() + done.size());
     }
 
-    private View packageCard(PackageStore.Item item) {
-        return packageCard(item, item.picked);
-    }
-
+    /**
+     * 待办清单风格卡片（对应 v6 原型）：
+     * 左侧大号勾选圈（一笔画对勾）→ 取件码 + 驿站/平台说明 → 平台亮码胶囊。
+     * 点卡片空白处复制取件码；左滑露出删除。
+     */
     private View packageCard(PackageStore.Item item, boolean done) {
-        int[] colors = colorsForCarrierName(item.carrier);
-        boolean hasCarrier = item.carrier != null && !item.carrier.isEmpty();
-        String mark = hasCarrier ? item.carrier.substring(0, 1) : "件";
-        int nameColor = done ? TEXT_SECONDARY : TEXT_PRIMARY;
-        int codeColor = done ? Color.rgb(160, 172, 178) : TEXT_PRIMARY;
+        // 出库平台是说明行的一部分：快递公司在校园场景里没用，不再展示
+        Destination identity = Destination.identityFor(item.platform);
+        String station = item.station == null ? "" : item.station.trim();
+        boolean hasStation = !station.isEmpty();
 
-        int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        int cardWidth = screenWidth - dp(36);
+        // SwipeRow（HorizontalScrollView）子 View 需要-wrap：按屏宽减页边距定宽
+        int cardWidth = getResources().getDisplayMetrics().widthPixels - dp(36);
 
         LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(16), dp(14), dp(16), dp(14));
-        card.setBackground(rounded(done ? Color.rgb(246, 249, 250) : CARD_WHITE, 18));
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(16), dp(14), dp(14), dp(14));
+        card.setBackground(rounded(done ? Color.rgb(246, 249, 250) : CARD_WHITE, 16));
         card.setLayoutParams(new LinearLayout.LayoutParams(cardWidth,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        // ---- 第一行：对勾 + 图标 + 名称/驿站 ----
-        LinearLayout top = new LinearLayout(this);
-        top.setOrientation(LinearLayout.HORIZONTAL);
-        top.setGravity(Gravity.CENTER_VERTICAL);
-
-        // 未取：水蓝空心圈；已取：实心灰圈 + 白色对勾
-        TextView check = text("✓", 14, Color.WHITE, Typeface.BOLD);
-        check.setGravity(Gravity.CENTER);
-        GradientDrawable checkBackground = rounded(done ? Color.rgb(176, 190, 197) : Color.TRANSPARENT, 999);
-        checkBackground.setStroke(dp(2), done ? Color.rgb(176, 190, 197) : Color.rgb(63, 179, 212));
-        if (!done) {
-            check.setTextColor(Color.TRANSPARENT);
-        }
-        check.setBackground(checkBackground);
-        check.setClickable(true);
-        check.setFocusable(true);
+        // ---- 左：大号勾选圈 ----
+        CheckCircleView check = new CheckCircleView(this, CHECK_IDLE, ACCENT_WATER);
+        check.setCheckedState(done, false);
         check.setContentDescription(done ? "取消已取件标记" : "标记为已取件");
-        check.setOnClickListener(v -> togglePicked(item));
-        top.addView(check, new LinearLayout.LayoutParams(dp(30), dp(30)));
+        check.setOnClickListener(v -> togglePicked(item, card));
+        card.addView(check, new LinearLayout.LayoutParams(dp(46), dp(46)));
 
-        TextView markView = text(mark, 14, Color.WHITE, Typeface.BOLD);
-        markView.setGravity(Gravity.CENTER);
-        markView.setBackground(gradient(done
-                ? new int[]{Color.rgb(186, 200, 206), Color.rgb(160, 175, 182)}
-                : colors, 11));
-        LinearLayout.LayoutParams markParams = new LinearLayout.LayoutParams(dp(36), dp(36));
-        markParams.leftMargin = dp(12);
-        markView.setLayoutParams(markParams);
-        top.addView(markView);
-
+        // ---- 中：取件码 + 驿站/平台说明 ----
         LinearLayout labels = new LinearLayout(this);
         labels.setOrientation(LinearLayout.VERTICAL);
-        labels.setPadding(dp(12), 0, dp(8), 0);
+        labels.setPadding(dp(14), 0, dp(8), 0);
 
-        TextView nameView = text(hasCarrier ? item.carrier : "我的包裹", 15, nameColor, Typeface.BOLD);
-        if (done) {
-            nameView.setPaintFlags(nameView.getPaintFlags() | android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);
-        }
-        labels.addView(nameView);
-
-        if (item.station != null && !item.station.isEmpty()) {
-            TextView stationView = text(item.station, 11, TEXT_SECONDARY, Typeface.NORMAL);
-            LinearLayout.LayoutParams stationParams = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-            );
-            stationParams.topMargin = dp(2);
-            stationView.setLayoutParams(stationParams);
-            labels.addView(stationView);
-        }
-        top.addView(labels, new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-
-        card.addView(top);
-
-        // ---- 第二行：大号取件码 + 复制按钮 ----
-        LinearLayout codeRow = new LinearLayout(this);
-        codeRow.setOrientation(LinearLayout.HORIZONTAL);
-        codeRow.setGravity(Gravity.CENTER_VERTICAL);
-        codeRow.setPadding(dp(14), dp(12), dp(12), dp(12));
-        GradientDrawable codeBackground = rounded(Color.rgb(242, 249, 252), 14);
-        codeBackground.setStroke(dp(1), Color.rgb(211, 230, 239));
-        codeRow.setBackground(codeBackground);
-        LinearLayout.LayoutParams codeRowParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        codeRowParams.topMargin = dp(12);
-        codeRow.setLayoutParams(codeRowParams);
-
-        LinearLayout codeLabels = new LinearLayout(this);
-        codeLabels.setOrientation(LinearLayout.VERTICAL);
-
-        TextView codeView = text(item.code, 24, codeColor, Typeface.BOLD);
+        TextView codeView = text("取件码：" + item.code, 16,
+                done ? DONE_TEXT : TEXT_PRIMARY, Typeface.BOLD);
         if (done) {
             codeView.setPaintFlags(codeView.getPaintFlags() | android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);
         }
-        codeLabels.addView(codeView);
+        labels.addView(codeView);
 
-        TextView codeCaption = text("取件码", 10, TEXT_SECONDARY, Typeface.NORMAL);
-        LinearLayout.LayoutParams captionParams = new LinearLayout.LayoutParams(
+        TextView metaView = text((hasStation ? station + "驿站" : "未标注驿站")
+                        + " · " + identity.identityName() + "出库",
+                12, TEXT_SECONDARY, Typeface.NORMAL);
+        LinearLayout.LayoutParams metaParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
         );
-        captionParams.topMargin = dp(2);
-        codeCaption.setLayoutParams(captionParams);
-        codeLabels.addView(codeCaption);
+        metaParams.topMargin = dp(3);
+        metaView.setLayoutParams(metaParams);
+        labels.addView(metaView);
 
-        codeRow.addView(codeLabels, new LinearLayout.LayoutParams(0,
+        card.addView(labels, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-        TextView copy = text(done ? "已取件" : "复制", 13, Color.WHITE, Typeface.BOLD);
-        copy.setGravity(Gravity.CENTER);
-        copy.setBackground(rounded(done ? Color.rgb(186, 200, 206) : ACCENT_WATER, 999));
-        copy.setPadding(dp(16), dp(8), dp(16), dp(8));
-        copy.setClickable(true);
-        copy.setFocusable(true);
-        copy.setContentDescription("复制取件码");
-        copy.setOnClickListener(v -> {
-            if (done) {
-                togglePicked(item);
-            } else {
-                copyCode(item.code);
-            }
-        });
-        codeRow.addView(copy);
+        // ---- 右：平台亮码胶囊（按钮本身就是平台标记） ----
+        TextView checkout = text("亮码", 13, Color.WHITE, Typeface.BOLD);
+        checkout.setGravity(Gravity.CENTER);
+        checkout.setBackground(rounded(done ? Color.rgb(186, 200, 206) : colorsFor(identity)[1], 999));
+        checkout.setPadding(dp(13), dp(8), dp(13), dp(8));
+        checkout.setClickable(true);
+        checkout.setFocusable(true);
+        checkout.setContentDescription("打开" + identity.title + "身份码");
+        checkout.setOnClickListener(v -> DeepLinkLauncher.open(this, identity));
+        card.addView(checkout);
 
-        card.addView(codeRow);
+        // 点卡片空白处复制取件码
+        card.setClickable(true);
+        card.setFocusable(true);
+        card.setContentDescription("复制取件码 " + item.code);
+        card.setOnClickListener(v -> copyCode(item.code));
 
-        // ---- 删除只走右滑：卡片左滑露出垃圾桶 ----
+        // ---- 删除只走左滑：卡片左滑露出垃圾桶 ----
         SwipeRow swipe = new SwipeRow();
-        swipe.setLayoutParams(verticalParams(dp(12)));
+        swipe.setLayoutParams(verticalParams(dp(10)));
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -1058,9 +1030,6 @@ public final class MainActivity extends Activity {
         row.addView(card);
         row.addView(buildSwipeDeleteAction(item, swipe));
         swipe.addView(row);
-
-        card.setClickable(true);
-        card.setOnClickListener(v -> swipe.smoothScrollTo(0, 0));
         return swipe;
     }
 
@@ -1120,7 +1089,7 @@ public final class MainActivity extends Activity {
         return action;
     }
 
-    private void showAddDialog() {
+    private void showAddDialog(View anchor) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(22), dp(18), dp(22), 0);
@@ -1146,19 +1115,61 @@ public final class MainActivity extends Activity {
         stationInput.setLayoutParams(stationParams);
         box.addView(stationInput);
 
-        new AlertDialog.Builder(this)
+        box.addView(platformSectionTitle());
+        final PlatformHolder holder = new PlatformHolder();
+        box.addView(buildPlatformPicker(holder, Destination.TAOBAO));
+
+        // 智能粘贴：把整段取件短信粘进来，自动拆出取件码 / 驿站 / 平台，
+        // 不让整段文字堆在「取件码」那一格里占地方
+        TextView pasteBtn = text("📋 粘贴短信自动识别", 13, ACCENT_WATER, Typeface.BOLD);
+        pasteBtn.setGravity(Gravity.CENTER);
+        GradientDrawable pasteBg = rounded(CARD_WHITE, 999);
+        pasteBg.setStroke(dp(1), LINE_COLOR);
+        pasteBtn.setBackground(pasteBg);
+        pasteBtn.setPadding(dp(14), dp(9), dp(14), dp(9));
+        pasteBtn.setClickable(true);
+        pasteBtn.setFocusable(true);
+        pasteBtn.setContentDescription("粘贴短信自动识别");
+        LinearLayout.LayoutParams pasteParams = verticalParams(dp(14));
+        pasteParams.topMargin = dp(12);
+        pasteBtn.setLayoutParams(pasteParams);
+        pasteBtn.setOnClickListener(v -> pasteAndParse(carrierInput, codeInput, stationInput, holder));
+        box.addView(pasteBtn);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("添加包裹")
                 .setView(box)
-                .setPositiveButton("保存", (dialog, which) -> {
-                    String code = codeInput.getText().toString().trim();
+                .setPositiveButton("保存", (d, which) -> {
+                    String rawCode = codeInput.getText().toString().trim();
+                    // 兜底：用户可能直接把整段短信粘进了取件码框，保存时再拆一次
+                    CodeParser.Result parsed = CodeParser.parse(rawCode);
+                    String code;
+                    String carrier;
+                    String station;
+                    String platform;
+                    if (parsed != null && !parsed.code.isEmpty()) {
+                        code = parsed.code;
+                        carrier = parsed.carrier.isEmpty()
+                                ? carrierInput.getText().toString().trim() : parsed.carrier;
+                        station = parsed.station.isEmpty()
+                                ? stationInput.getText().toString().trim() : parsed.station;
+                        platform = parsed.platform.isEmpty()
+                                ? holder.value.key : Destination.identityFor(parsed.platform).key;
+                    } else {
+                        code = rawCode;
+                        carrier = carrierInput.getText().toString().trim();
+                        station = stationInput.getText().toString().trim();
+                        platform = holder.value.key;
+                    }
                     if (code.isEmpty()) {
                         Toast.makeText(this, "没有填写取件码，未保存", Toast.LENGTH_SHORT).show();
                         return;
                     }
                     PackageStore.Item item = new PackageStore.Item();
-                    item.carrier = carrierInput.getText().toString().trim();
+                    item.carrier = carrier;
                     item.code = code;
-                    item.station = stationInput.getText().toString().trim();
+                    item.station = station;
+                    item.platform = platform;
                     item.createdAt = System.currentTimeMillis();
                     List<PackageStore.Item> items = PackageStore.load(this);
                     items.add(0, item);
@@ -1168,6 +1179,79 @@ public final class MainActivity extends Activity {
                 })
                 .setNegativeButton("取消", null)
                 .show();
+        playCircularReveal(dialog, anchor);
+    }
+
+    /**
+     * 从「添加包裹」按钮位置圆形扩散打开弹窗（API 21+，minSdk 23 恒可用）。
+     * 先把 decor 藏起来避免闪烁，布局完成后再从按钮中心扩散展开。
+     */
+    private void playCircularReveal(AlertDialog dialog, View anchor) {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.LOLLIPOP) {
+            return;
+        }
+        android.view.Window window = dialog.getWindow();
+        if (window == null) {
+            return;
+        }
+        final View decor = window.getDecorView();
+        decor.setVisibility(View.INVISIBLE);
+        decor.post(() -> {
+            int[] anchorLoc = new int[2];
+            anchor.getLocationOnScreen(anchorLoc);
+            int[] decorLoc = new int[2];
+            decor.getLocationOnScreen(decorLoc);
+            int cx = anchorLoc[0] + anchor.getWidth() / 2 - decorLoc[0];
+            int cy = anchorLoc[1] + anchor.getHeight() / 2 - decorLoc[1];
+            float maxRadius = (float) Math.hypot(Math.max(cx, decor.getWidth() - cx),
+                    Math.max(cy, decor.getHeight() - cy));
+            android.animation.Animator reveal = android.view.ViewAnimationUtils
+                    .createCircularReveal(decor, cx, cy, 0f, maxRadius);
+            reveal.addListener(new android.animation.AnimatorListenerAdapter() {
+                @Override
+                public void onAnimationStart(android.animation.Animator animation) {
+                    decor.setVisibility(View.VISIBLE);
+                }
+            });
+            reveal.setDuration(320);
+            reveal.start();
+        });
+    }
+
+    /** 读取剪贴板 → CodeParser 解析 → 回填到录入表单的三个字段和平台选择。 */
+    private void pasteAndParse(
+            EditText carrierInput,
+            EditText codeInput,
+            EditText stationInput,
+            PlatformHolder holder
+    ) {
+        ClipboardManager manager = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (manager == null || !manager.hasPrimaryClip()) {
+            Toast.makeText(this, "剪贴板为空，无法识别", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        CharSequence raw = manager.getPrimaryClip().getItemAt(0).getText();
+        if (raw == null) {
+            Toast.makeText(this, "剪贴板里没有文字", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        CodeParser.Result result = CodeParser.parse(raw.toString());
+        if (result == null || result.code.isEmpty()) {
+            Toast.makeText(this, "没从这串文字里找到取件码", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!result.carrier.isEmpty()) {
+            carrierInput.setText(result.carrier);
+        }
+        codeInput.setText(result.code);
+        if (!result.station.isEmpty()) {
+            stationInput.setText(result.station);
+        }
+        if (!result.platform.isEmpty()) {
+            holder.value = Destination.identityFor(result.platform);
+            restylePlatformPicker(holder.row, holder.value);
+        }
+        Toast.makeText(this, "已识别取件码 " + result.code, Toast.LENGTH_SHORT).show();
     }
 
     private void confirmDelete(PackageStore.Item target) {
@@ -1274,10 +1358,11 @@ public final class MainActivity extends Activity {
 
         String carrier = parsed != null ? parsed.carrier : "";
         String station = parsed != null ? parsed.station : "";
-        showClipDialog(code, carrier, station);
+        String platform = parsed != null ? parsed.platform : "";
+        showClipDialog(code, carrier, station, platform);
     }
 
-    private void showClipDialog(String code, String carrier, String station) {
+    private void showClipDialog(String code, String carrier, String station, String platform) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(22), dp(18), dp(22), 0);
@@ -1305,14 +1390,21 @@ public final class MainActivity extends Activity {
         stationInput.setLayoutParams(stationParams);
         box.addView(stationInput);
 
+        box.addView(platformSectionTitle());
+        final PlatformHolder holder = new PlatformHolder();
+        box.addView(buildPlatformPicker(holder, Destination.identityFor(platform)));
+
         new AlertDialog.Builder(this)
                 .setTitle("保存这个取件码？")
                 .setView(box)
                 .setPositiveButton("保存", (dialog, which) -> {
-                    PackageStore.addIfAbsent(this,
+                    PackageStore.addIfAbsent(
+                            this,
                             carrierInput.getText().toString().trim(),
                             code,
-                            stationInput.getText().toString().trim());
+                            stationInput.getText().toString().trim(),
+                            holder.value.key
+                    );
                     refreshPackageList();
                 })
                 .setNegativeButton("忽略", null)
@@ -1371,32 +1463,67 @@ public final class MainActivity extends Activity {
         return input;
     }
 
-    private int[] colorsForCarrierName(String name) {
-        String value = name == null ? "" : name;
-        if (value.contains("菜鸟")) return CAINIAO_COLORS;
-        if (value.contains("淘")) return TAOBAO_COLORS;
-        if (value.contains("拼") || value.contains("多多")) return PDD_COLORS;
-        if (value.contains("京东")) return JD_COLORS;
-        if (value.contains("小红书")) return XHS_COLORS;
-        if (value.contains("抖音")) return DOUYIN_COLORS;
-        if (value.contains("中通") || value.contains("圆通") || value.contains("申通")
-                || value.contains("韵达") || value.contains("极兔")) {
-            return CAINIAO_COLORS;
+    /** 弹窗里的平台选择结果持有者：lambda 里要改，所以不能直接拿局部变量。 */
+    private static final class PlatformHolder {
+        Destination value = Destination.TAOBAO;
+        LinearLayout row;   // 供智能粘贴后回写选中态
+    }
+
+    private TextView platformSectionTitle() {
+        TextView title = text("去哪个平台出库", 12, TEXT_SECONDARY, Typeface.BOLD);
+        LinearLayout.LayoutParams params = verticalParams(dp(16));
+        params.bottomMargin = dp(8);
+        title.setLayoutParams(params);
+        return title;
+    }
+
+    /** 三选一平台选择器，选中的结果写进 holder.value。 */
+    private View buildPlatformPicker(PlatformHolder holder, Destination initial) {
+        holder.value = initial;
+        LinearLayout row = new LinearLayout(this);
+        holder.row = row;
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        for (int i = 0; i < Destination.IDENTITY_DESTINATIONS.length; i++) {
+            Destination destination = Destination.IDENTITY_DESTINATIONS[i];
+            TextView button = text(destination.identityName(), 13, TEXT_PRIMARY, Typeface.BOLD);
+            button.setGravity(Gravity.CENTER);
+            button.setClickable(true);
+            button.setFocusable(true);
+            button.setTag(destination);
+            button.setContentDescription("选择" + destination.identityName());
+            button.setOnClickListener(v -> {
+                holder.value = (Destination) v.getTag();
+                restylePlatformPicker(row, holder.value);
+            });
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(42), 1f);
+            if (i > 0) {
+                params.leftMargin = dp(8);
+            }
+            row.addView(button, params);
         }
-        return new int[]{Color.rgb(63, 145, 190), Color.rgb(31, 106, 140)};
+        restylePlatformPicker(row, holder.value);
+        return row;
+    }
+
+    private void restylePlatformPicker(LinearLayout row, Destination selected) {
+        for (int i = 0; i < row.getChildCount(); i++) {
+            View child = row.getChildAt(i);
+            if (!(child instanceof TextView) || !(child.getTag() instanceof Destination)) {
+                continue;
+            }
+            Destination destination = (Destination) child.getTag();
+            boolean picked = destination == selected;
+            int[] colors = colorsFor(destination);
+            GradientDrawable background = rounded(picked ? colors[1] : CARD_WHITE, 10);
+            background.setStroke(dp(1), picked ? colors[1] : LINE_COLOR);
+            child.setBackground(background);
+            ((TextView) child).setTextColor(picked ? Color.WHITE : TEXT_SECONDARY);
+        }
     }
 
     // =====================================================================
     // 通用小组件
     // =====================================================================
-
-    private TextView sectionTitle(String value, int topMarginDp) {
-        TextView view = text(value, 17, TEXT_PRIMARY, Typeface.BOLD);
-        LinearLayout.LayoutParams params = verticalParams(topMarginDp);
-        params.bottomMargin = dp(10);
-        view.setLayoutParams(params);
-        return view;
-    }
 
     private View hintCard(String emoji, String message) {
         LinearLayout card = new LinearLayout(this);

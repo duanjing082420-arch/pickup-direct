@@ -11,6 +11,7 @@ final class CodeParser {
         String code = "";
         String carrier = "";
         String station = "";
+        String platform = "";   // 出库时去哪个平台亮身份码，存 Destination.key
     }
 
     // 必须出现这些关键词之一，才认为这条消息和取件有关
@@ -27,15 +28,24 @@ final class CodeParser {
             Pattern.compile("货位\\s*[:：]?\\s*([0-9A-Za-z]{1,6}(?:[-－][0-9A-Za-z]{1,8}){0,3})")
     };
 
-    // 驿站 / 代收点名称
-    private static final Pattern[] STATION_PATTERNS = {
-            Pattern.compile("([^\\s，,。;；]{2,20}(?:驿站|代收点|服务中心|快递柜|自提点|菜鸟))"),
-            Pattern.compile("到\\s*([^\\s，,。;；]{2,20}(?:驿站|代收点|门店))")
-    };
+    // 驿站 / 代收点名称。先剥掉短信签名用的【】[]，否则会把【菜鸟驿站】整段吞进来
+    //（这是 2.2.0 前的一个真实 bug：解析出的驿站名是「【菜鸟驿站」这种垃圾）。
+    // 找到后缀后向左回溯取名字，遇到「到/在/至/达」或标点就停，最多回溯 8 个字。
+    private static final Pattern STATION_BRACKET = Pattern.compile("[【\\[][^】\\]]{0,20}[】\\]]");
+    private static final Pattern STATION_SUFFIX =
+            Pattern.compile("驿站|代收点|快递柜|自提点|服务中心");
+    private static final String STATION_LEFT_STOP = "到在至达";
 
     private static final String[] CARRIERS = {
             "菜鸟驿站", "菜鸟", "中通", "圆通", "申通", "韵达", "极兔", "京东",
             "顺丰", "邮政", "EMS", "丹鸟", "拼多多", "多多买菜", "淘宝"
+    };
+
+    // 归属平台线索：只认拼多多，其余（菜鸟、淘宝、看不出来源的）一律归淘宝。
+    // 拼多多的件即使进了菜鸟驿站，也要用拼多多自己的身份码出库（两套末端系统不互通）。
+    private static final String[][] PLATFORM_RULES = {
+            {"拼多多", "pinduoduo"},
+            {"多多买菜", "pinduoduo"}
     };
 
     private CodeParser() {
@@ -58,6 +68,7 @@ final class CodeParser {
         result.code = code;
         result.carrier = findCarrier(value);
         result.station = findStation(value);
+        result.platform = findPlatform(value);
         return result;
     }
 
@@ -107,13 +118,37 @@ final class CodeParser {
         return "";
     }
 
-    private static String findStation(String value) {
-        for (Pattern pattern : STATION_PATTERNS) {
-            Matcher matcher = pattern.matcher(value);
-            if (matcher.find()) {
-                return matcher.group(1).trim();
+    /** 推断出库该去哪个平台亮身份码，看不出来返回空字符串（由上层兜底）。 */
+    private static String findPlatform(String value) {
+        for (String[] rule : PLATFORM_RULES) {
+            if (value.contains(rule[0])) {
+                return rule[1];
             }
         }
         return "";
+    }
+
+    private static String findStation(String value) {
+        String cleaned = STATION_BRACKET.matcher(value).replaceAll("");
+        Matcher matcher = STATION_SUFFIX.matcher(cleaned);
+        if (!matcher.find()) {
+            return "";
+        }
+        int end = matcher.end();
+        int start = matcher.start();
+        while (start > 0) {
+            char c = cleaned.charAt(start - 1);
+            if (STATION_LEFT_STOP.indexOf(c) >= 0
+                    || c == ' ' || c == '\t'
+                    || "，,。;；、".indexOf(c) >= 0) {
+                break;
+            }
+            if (matcher.start() - start >= 8) {
+                break;
+            }
+            start--;
+        }
+        String name = cleaned.substring(start, end).trim();
+        return name.length() >= 3 ? name : "";
     }
 }

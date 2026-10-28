@@ -45,7 +45,13 @@ public final class PickupNotificationListener extends NotificationListenerServic
 
         CodeParser.Result result = CodeParser.parse(builder.toString());
         if (result != null && !result.code.isEmpty()) {
-            PackageStore.addIfAbsent(this, result.carrier, result.code, result.station);
+            PackageStore.addIfAbsent(
+                    this,
+                    result.carrier,
+                    result.code,
+                    result.station,
+                    result.platform
+            );
         }
     }
 

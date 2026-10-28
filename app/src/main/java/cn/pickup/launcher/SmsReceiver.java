@@ -39,7 +39,13 @@ public final class SmsReceiver extends BroadcastReceiver {
         }
         CodeParser.Result result = CodeParser.parse(builder.toString());
         if (result != null && !result.code.isEmpty()) {
-            PackageStore.addIfAbsent(context, result.carrier, result.code, result.station);
+            PackageStore.addIfAbsent(
+                    context,
+                    result.carrier,
+                    result.code,
+                    result.station,
+                    result.platform
+            );
         }
     }
 }

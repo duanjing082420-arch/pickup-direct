@@ -18,8 +18,8 @@ android {
         applicationId = "cn.pickup.launcher"
         minSdk = 23
         targetSdk = 35
-        versionCode = 7
-        versionName = "2.1.0"
+        versionCode = 10
+        versionName = "2.3.0"
     }
 
     if (signingPropertiesFile.exists()) {
@@ -50,4 +50,9 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+}
+
+dependencies {
+    // 纯 JVM 本地单元测试：CodeParser 不依赖 Android 框架，可在电脑上直接跑
+    testImplementation("junit:junit:4.13.2")
 }

@@ -141,4 +141,23 @@ enum Destination {
         }
         return null;
     }
+
+    /**
+     * 出库只需要两个平台：淘宝和拼多多。
+     * 校园场景里菜鸟归淘宝（同属阿里末端体系），多一个选项只是增加决策成本。
+     */
+    static final Destination[] IDENTITY_DESTINATIONS = {TAOBAO, PINDUODUO};
+
+    /** 卡片上平台标记用的短名，只有淘宝和拼多多两种。 */
+    String identityName() {
+        return this == PINDUODUO ? "拼多多" : "淘宝";
+    }
+
+    /**
+     * 包裹归属平台 key → 出库要用的身份码入口，只有淘宝和拼多多两种。
+     * 菜鸟、空值、旧数据缺失、非法值一律归淘宝，保证老用户升级后卡片不会没有按钮。
+     */
+    static Destination identityFor(String platformKey) {
+        return fromKey(platformKey) == PINDUODUO ? PINDUODUO : TAOBAO;
+    }
 }

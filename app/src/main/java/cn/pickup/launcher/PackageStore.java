@@ -18,6 +18,7 @@ final class PackageStore {
         String carrier = "";   // 快递公司 / 平台，如：中通、菜鸟驿站
         String code = "";      // 取件码，如：3-1-2040
         String station = "";   // 驿站位置（可选）
+        String platform = "";  // 出库时去哪个平台亮身份码，存 Destination.key
         long createdAt;        // 录入时间
         boolean picked;        // 是否已取件
         long pickedAt;         // 取件时间
@@ -32,6 +33,21 @@ final class PackageStore {
 
     /** 新增一条（按取件码去重），供短信 / 通知自动入库使用。 */
     static boolean addIfAbsent(Context context, String carrier, String code, String station) {
+        return addIfAbsent(context, carrier, code, station, "");
+    }
+
+    /**
+     * 新增一条（按取件码去重）。
+     * platform 为空时留空，由 Destination.identityFor 在读取时兜底为默认平台，
+     * 这样旧数据（没有 platform 字段）也能正常显示亮码按钮。
+     */
+    static boolean addIfAbsent(
+            Context context,
+            String carrier,
+            String code,
+            String station,
+            String platform
+    ) {
         if (code == null || code.trim().isEmpty()) {
             return false;
         }
@@ -46,6 +62,7 @@ final class PackageStore {
         item.carrier = carrier == null ? "" : carrier;
         item.code = trimmed;
         item.station = station == null ? "" : station;
+        item.platform = platform == null ? "" : platform;
         item.createdAt = System.currentTimeMillis();
         items.add(0, item);
         save(context, items);
@@ -100,6 +117,7 @@ final class PackageStore {
                 item.carrier = object.optString("carrier", "");
                 item.code = object.optString("code", "");
                 item.station = object.optString("station", "");
+                item.platform = object.optString("platform", "");
                 item.createdAt = object.optLong("createdAt", 0L);
                 item.picked = object.optBoolean("picked", false);
                 item.pickedAt = object.optLong("pickedAt", 0L);
@@ -119,6 +137,7 @@ final class PackageStore {
                 object.put("carrier", item.carrier);
                 object.put("code", item.code);
                 object.put("station", item.station);
+                object.put("platform", item.platform);
                 object.put("createdAt", item.createdAt);
                 object.put("picked", item.picked);
                 object.put("pickedAt", item.pickedAt);
