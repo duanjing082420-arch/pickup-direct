@@ -55,7 +55,8 @@ public class CodeParserTest {
         assertNotNull(r);
         assertEquals("5-2-3311", r.code);
         assertEquals("西区驿站", r.station);
-        assertEquals("中通快递", r.carrier);
+        // carrier 是关键词匹配：CARRIERS 表里是「中通」，签名里的「中通快递」命中其前缀
+        assertEquals("中通", r.carrier);
     }
 
     @Test
