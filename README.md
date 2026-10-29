@@ -1,21 +1,27 @@
-# 快递取件 2.1（改造版）
+# 快递取件 2.3（改造版）
 
-一个 Android 取件码工具：既能一键打开菜鸟 / 淘宝 / 拼多多的身份码和待取列表，也能把你自己的取件码整理成卡片，大字号显示、一键复制。
+一个 Android 取件码工具：既能一键打开菜鸟 / 淘宝 / 拼多多的身份码和待取列表，也能把你自己的取件码整理成卡片，待办清单式勾选、点一下直接亮码出库。
 
 上游项目：[EyanLiu/pickup-code-launcher](https://github.com/EidenLiu/pickup-code-launcher)（MIT）
-当前仓库：https://github.com/duanjing082420-arch/pickup-code
+当前仓库：https://github.com/duanjing082420-arch/pickup-direct
 
 ## 下载 APK
 
-每次推送代码后，GitHub Actions 会自动编译出调试版 APK，在这里下载：
+每次推送代码后，GitHub Actions 会自动编译调试版 APK 并发到 [Releases](https://github.com/duanjing082420-arch/pickup-direct/releases)。
 
-https://github.com/duanjing082420-arch/pickup-code/actions
+**在手机上安装，三步：**
 
-- 点进最新一次成功的 **Build Debug APK** 任务
-- 页面底部 **Artifacts** → 下载 `pickup-code-debug-apk`（zip，解压得到 `app-debug.apk`）
-- 需要登录 GitHub 才能下载，产物保留 30 天
+1. 手机浏览器打开
+   `github.com/duanjing082420-arch/pickup-direct/releases/tag/v2.3.0`
+2. 点 `app-debug.apk` 下载（公开仓库免登录，直接下）
+3. 下载完点开安装
 
-安装注意：这是**调试签名**版本，每次云端编译签名都不同，覆盖安装会失败，**先卸载旧版再安装**。已录入的取件码保存在手机本地，卸载会一起清掉，重装后需重新录入。
+安装注意：
+
+- 这是**调试签名**版本，每次云端编译签名都不同，覆盖安装会失败，**先卸载旧版再安装**
+- 已录入的取件码保存在手机本地，卸载会一起清掉，重装后需重新录入
+- 首次安装可能提示「未知来源」，在设置里允许**当前浏览器**安装未知应用即可
+- 别用微信传 APK：微信会把文件改名为 `app-debug.apk.1`，还得手动改后缀
 
 ## 界面结构（v2.3.0 · 待办清单风格）
 
