@@ -17,7 +17,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewParent;
-import android.view.animation.FastOutSlowInInterpolator;
+import android.view.animation.PathInterpolator;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
@@ -44,6 +44,11 @@ public final class MainActivity extends Activity {
     private static final int NAV_IDLE = Color.rgb(154, 166, 157);
     private static final int CHECK_IDLE = Color.rgb(198, 207, 221);
     private static final int DONE_TEXT = Color.rgb(160, 172, 178);
+
+    // 页面切换曲线（快出慢入）。framework 里的 FastOutSlowInInterpolator 是 @hide，
+    // 用 public 的 PathInterpolator 手写同一条 cubic-bezier(.4, 0, .2, 1)。
+    private static final PathInterpolator PAGE_EASE = new PathInterpolator(0.4f, 0f, 0.2f, 1f);
+    private static final long PAGE_SWITCH_DURATION = 320L;
 
     // ===== 平台品牌色（渐变起止） =====
     private static final int[] CAINIAO_COLORS = {Color.rgb(63, 179, 212), Color.rgb(31, 122, 158)};
@@ -268,8 +273,8 @@ public final class MainActivity extends Activity {
         in.animate()
                 .alpha(1f)
                 .translationX(0f)
-                .setDuration(320)
-                .setInterpolator(new FastOutSlowInInterpolator())
+                .setDuration(PAGE_SWITCH_DURATION)
+                .setInterpolator(PAGE_EASE)
                 .setListener(null)
                 .start();
 
@@ -278,8 +283,8 @@ public final class MainActivity extends Activity {
         out.animate()
                 .alpha(0f)
                 .translationX(forward ? -dp(32) : dp(32))
-                .setDuration(320)
-                .setInterpolator(new FastOutSlowInInterpolator())
+                .setDuration(PAGE_SWITCH_DURATION)
+                .setInterpolator(PAGE_EASE)
                 .setListener(new AnimatorListenerAdapter() {
                     @Override
                     public void onAnimationEnd(Animator animation) {
