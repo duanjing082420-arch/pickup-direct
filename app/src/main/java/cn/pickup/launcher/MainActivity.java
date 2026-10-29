@@ -1,5 +1,7 @@
 package cn.pickup.launcher;
 
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ClipData;
@@ -10,9 +12,12 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.view.GestureDetector;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewParent;
+import android.view.animation.FastOutSlowInInterpolator;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
@@ -147,7 +152,7 @@ public final class MainActivity extends Activity {
         root.addView(buildHeader());
         root.addView(buildSegmentBar());
 
-        FrameLayout content = new FrameLayout(this);
+        FrameLayout content = new PageContainer(this);
         pickupPage = buildPickupPage();
         checkoutPage = buildCheckoutPage();
         checkoutPage.setVisibility(View.GONE);
@@ -215,7 +220,7 @@ public final class MainActivity extends Activity {
         item.setClickable(true);
         item.setFocusable(true);
         item.setContentDescription("切换到" + label);
-        item.setOnClickListener(v -> switchTab(tab));
+        item.setOnClickListener(v -> switchTab(tab, true));
         item.addView(text(label, 14, TEXT_SECONDARY, Typeface.BOLD));
         return item;
     }
@@ -231,11 +236,131 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void switchTab(int tab) {
+    /**
+     * 切换页面：新页从侧面淡入、旧页淡出，320ms 快出慢入曲线，不是生硬的显隐。
+     * 快速连点时会先取消上一次动画，避免半透明页面卡在屏幕上。
+     */
+    private void switchTab(int tab, boolean animate) {
+        if (tab == currentTab) {
+            return;
+        }
+        boolean forward = tab == TAB_CHECKOUT;   // 从左往右推进到身份码页
+        final View in = forward ? checkoutPage : pickupPage;
+        final View out = forward ? pickupPage : checkoutPage;
         currentTab = tab;
-        pickupPage.setVisibility(tab == TAB_PICKUP ? View.VISIBLE : View.GONE);
-        checkoutPage.setVisibility(tab == TAB_CHECKOUT ? View.VISIBLE : View.GONE);
         restyleSegmentBar();
+
+        if (!animate) {
+            in.setVisibility(View.VISIBLE);
+            in.setAlpha(1f);
+            in.setTranslationX(0f);
+            out.setVisibility(View.GONE);
+            return;
+        }
+
+        in.animate().cancel();
+        out.animate().cancel();
+
+        in.setVisibility(View.VISIBLE);
+        in.bringToFront();               // 淡入的页面要盖在淡出页面之上
+        in.setAlpha(0f);
+        in.setTranslationX(forward ? dp(32) : -dp(32));
+        in.animate()
+                .alpha(1f)
+                .translationX(0f)
+                .setDuration(320)
+                .setInterpolator(new FastOutSlowInInterpolator())
+                .setListener(null)
+                .start();
+
+        out.setAlpha(1f);
+        out.setTranslationX(0f);
+        out.animate()
+                .alpha(0f)
+                .translationX(forward ? -dp(32) : dp(32))
+                .setDuration(320)
+                .setInterpolator(new FastOutSlowInInterpolator())
+                .setListener(new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationEnd(Animator animation) {
+                        out.setVisibility(View.GONE);
+                        out.setAlpha(1f);
+                        out.setTranslationX(0f);
+                    }
+                })
+                .start();
+    }
+
+    /**
+     * 页面容器：左右滑动切页。
+     * 卡片上的横向手势归 SwipeRow（左滑删除），它通过 requestDisallowInterceptTouchEvent
+     * 声明优先，所以外层只在非卡片区域（顶部、列表间隙、底部按钮区）接管横滑，两者不打架。
+     */
+    private final class PageContainer extends FrameLayout {
+        private final GestureDetector detector;
+        private float startX;
+        private float startY;
+        private boolean dragging;
+
+        PageContainer(Context context) {
+            super(context);
+            detector = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
+                @Override
+                public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
+                    if (e1 == null || e2 == null) {
+                        return false;
+                    }
+                    // 只有明显横向、速度够快才切页，纵向滚动（列表上下滑）不误触
+                    if (Math.abs(velocityX) > Math.abs(velocityY) * 1.5f && Math.abs(velocityX) > 500f) {
+                        switchTab(velocityX < 0 ? TAB_CHECKOUT : TAB_PICKUP, true);
+                        return true;
+                    }
+                    return false;
+                }
+            });
+        }
+
+        @Override
+        public boolean onInterceptTouchEvent(MotionEvent event) {
+            detector.onTouchEvent(event);
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    startX = event.getX();
+                    startY = event.getY();
+                    dragging = false;
+                    break;
+                case MotionEvent.ACTION_MOVE:
+                    float dx = Math.abs(event.getX() - startX);
+                    float dy = Math.abs(event.getY() - startY);
+                    if (dx > dy && dx > dp(14)) {
+                        dragging = true;
+                    }
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    dragging = false;
+                    break;
+                default:
+                    break;
+            }
+            return dragging;
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            detector.onTouchEvent(event);
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                float dx = event.getX() - startX;
+                // 慢速拖动也能切页，只要横向位移够大
+                if (action == MotionEvent.ACTION_UP && Math.abs(dx) > dp(64)
+                        && Math.abs(dx) > Math.abs(event.getY() - startY)) {
+                    switchTab(dx < 0 ? TAB_CHECKOUT : TAB_PICKUP, true);
+                }
+                dragging = false;
+            }
+            return true;
+        }
     }
 
     /** 底部常驻「＋ 添加包裹」按钮，单手拇指的自然落点。 */
@@ -643,29 +768,30 @@ public final class MainActivity extends Activity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.HORIZONTAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
-        card.setPadding(dp(18), dp(18), dp(16), dp(18));
-        card.setBackground(rounded(CARD_WHITE, 18));
+        card.setPadding(dp(22), dp(26), dp(20), dp(26));
+        card.setBackground(rounded(CARD_WHITE, 22));
+        card.setMinimumHeight(dp(120));
         card.setClickable(true);
         card.setFocusable(true);
         card.setContentDescription("打开" + destination.identityName() + "身份码");
         card.setOnClickListener(v -> DeepLinkLauncher.open(this, destination));
-        card.setLayoutParams(verticalParams(dp(12)));
+        card.setLayoutParams(verticalParams(dp(16)));
 
-        TextView mark = text(destination.mark, 20, Color.WHITE, Typeface.BOLD);
+        TextView mark = text(destination.mark, 27, Color.WHITE, Typeface.BOLD);
         mark.setGravity(Gravity.CENTER);
-        mark.setBackground(gradient(colorsFor(destination), 14));
-        card.addView(mark, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        mark.setBackground(gradient(colorsFor(destination), 18));
+        card.addView(mark, new LinearLayout.LayoutParams(dp(64), dp(64)));
 
         LinearLayout labels = new LinearLayout(this);
         labels.setOrientation(LinearLayout.VERTICAL);
-        labels.setPadding(dp(14), 0, dp(8), 0);
+        labels.setPadding(dp(16), 0, dp(8), 0);
 
-        labels.addView(text(destination.identityName() + "身份码", 16, TEXT_PRIMARY, Typeface.BOLD));
+        labels.addView(text(destination.identityName() + "身份码", 19, TEXT_PRIMARY, Typeface.BOLD));
 
         TextView sub = text(destination == Destination.PINDUODUO
                         ? "多多代收点 · 校园取件"
                         : "菜鸟驿站 · 校园取件",
-                12, TEXT_SECONDARY, Typeface.NORMAL);
+                13, TEXT_SECONDARY, Typeface.NORMAL);
         LinearLayout.LayoutParams subParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -677,10 +803,10 @@ public final class MainActivity extends Activity {
         card.addView(labels, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-        TextView go = text("亮码 ›", 14, ACCENT_WATER, Typeface.BOLD);
+        TextView go = text("亮码 ›", 16, ACCENT_WATER, Typeface.BOLD);
         go.setGravity(Gravity.CENTER);
         go.setBackground(rounded(Color.rgb(232, 240, 249), 999));
-        go.setPadding(dp(14), dp(9), dp(14), dp(9));
+        go.setPadding(dp(18), dp(12), dp(18), dp(12));
         card.addView(go);
         return card;
     }
@@ -1040,6 +1166,13 @@ public final class MainActivity extends Activity {
             setOverScrollMode(View.OVER_SCROLL_NEVER);
             setOnTouchListener((v, event) -> {
                 int action = event.getActionMasked();
+                if (action == MotionEvent.ACTION_DOWN) {
+                    // 卡片上的横向手势归我（左滑删除），别让外层页面容器抢去切页
+                    ViewParent parent = getParent();
+                    if (parent != null) {
+                        parent.requestDisallowInterceptTouchEvent(true);
+                    }
+                }
                 if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
                     int actionWidth = dp(SWIPE_ACTION_WIDTH);
                     final int target = getScrollX() > actionWidth / 2 ? actionWidth : 0;
